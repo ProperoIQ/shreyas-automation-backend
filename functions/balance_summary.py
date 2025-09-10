@@ -1,4 +1,5 @@
 import pandas as pd
+import xlsxwriter
 
 def read_excel_file(file_path):
     try:
@@ -34,14 +35,14 @@ def generate_sheets_by_balance(dataframe, column_index):
     return derived_sheets
 
 def calculate_totals(df):
-    df = df.apply(pd.to_numeric, errors='coerce').fillna(0)
+    df.iloc[:, 1:10] = df.iloc[:, 1:10].apply(pd.to_numeric, errors='coerce').fillna(0)
     totals = {
-        'svm_invoice_balance_sum': df.iloc[:, 4].sum(),
-        'svm_available_credits_sum': df.iloc[:, 5].sum(),
-        'svm_balance': df.iloc[:, 6].sum(),
-        'nvb_invoice_balance_sum': df.iloc[:, 1].sum(),
-        'nvb_available_credits_sum': df.iloc[:, 2].sum(),
-        'nvb_balance': df.iloc[:, 3].sum(),
+        'smcs_invoice_balance_sum': df.iloc[:, 1].sum(),
+        'smcs_available_credits_sum': df.iloc[:, 2].sum(),
+        'smcs_balance': df.iloc[:, 3].sum(),
+        'nvb_invoice_balance_sum': df.iloc[:, 4].sum(),
+        'nvb_available_credits_sum': df.iloc[:, 5].sum(),
+        'nvb_balance': df.iloc[:, 6].sum(),
         'consolidated_invoice_balance_sum': df.iloc[:, 7].sum(),
         'consolidated_available_credits_sum': df.iloc[:, 8].sum(),
         'consolidated_cons_bal_os_sum': df.iloc[:, 9].sum(),
@@ -68,10 +69,12 @@ def apply_color_formatting(worksheet, num_rows, num_cols, workbook):
     consolidated_format = workbook.add_format({'bg_color': '#FF0000', 'border': 1})
     border_format = workbook.add_format({'border': 1})
 
-    # Apply specific column formats INCLUDING headers (row index 1)
+    # Apply specific column formats INCLUDING headers (row index 0 and 1)
     worksheet.conditional_format(0, 1, num_rows + 1, 3, {'type': 'no_blanks', 'format': smcs_format})
     worksheet.conditional_format(0, 4, num_rows + 1, 6, {'type': 'no_blanks', 'format': nvb_format})
     worksheet.conditional_format(0, 7, num_rows + 1, 9, {'type': 'no_blanks', 'format': consolidated_format})
+    worksheet.conditional_format(0, 10, num_rows + 1, 15, {'type': 'no_blanks', 'format': smcs_format})
+    worksheet.conditional_format(0, 16, num_rows + 1, 21, {'type': 'no_blanks', 'format': nvb_format})
 
     # Apply border to entire used area INCLUDING header rows
     worksheet.conditional_format(0, 0, num_rows + 2, num_cols - 1, {'type': 'no_blanks', 'format': border_format})
@@ -92,17 +95,24 @@ def process_file(input_file, output_file):
         top_headers = [
             "", "SMCS Receivables", "SMCS Receivables", "SMCS Receivables",
             "NVB Receivables", "NVB Receivables", "NVB Receivables",
-            "Consolidated Receivables", "Consolidated Receivables", "Consolidated Receivables"
+            "Consolidated Receivables", "Consolidated Receivables", "Consolidated Receivables",
+            "SMCS Client Data", "SMCS Client Data", "SMCS Client Data", "SMCS Client Data", "SMCS Client Data", "SMCS Client Data",
+            "NVB Client Data", "NVB Client Data", "NVB Client Data", "NVB Client Data", "NVB Client Data", "NVB Client Data"
         ]
         sub_headers = [
             "customer_name", "Invoice Balance", "Available Credits", "Closing Balance",
             "Invoice Balance", "Available Credits", "Closing Balance",
-            "Invoice Balance", "Available Credits", "Closing Balance"
+            "Invoice Balance", "Available Credits", "Closing Balance",
+            "Last Name", "Email", "Mobile Phone", "Client Coordinator", "Leadership", "Is Customer part of the Group of Companies",
+            "Last Name", "Email", "Mobile Phone", "Client Coordinator", "Leadership", "Is Customer part of the Group of Companies"
         ]
 
+        # Sort consolidated descending
+        consolidated_df = consolidated_df.sort_values(by=consolidated_df.columns[split_column_index], ascending=False)
+
         # Write consolidated
-        consolidated_df.to_excel(writer, sheet_name='Consolidated_Descending', index=False, header=False, startrow=2)
-        worksheet = writer.sheets['Consolidated_Descending']
+        consolidated_df.to_excel(writer, sheet_name='Consolidated', index=False, header=False, startrow=2)
+        worksheet = writer.sheets['Consolidated']
 
         for col_num, header in enumerate(top_headers):
             worksheet.write(0, col_num, header)
@@ -113,9 +123,8 @@ def process_file(input_file, output_file):
 
         # Derived Sheets
         for sheet_name, df in derived_sheets.items():
+            df = df.sort_values(by=df.columns[split_column_index], ascending=False)
             df.reset_index(drop=True, inplace=True)
-            for col_idx in range(1, 10):
-                df.iloc[:, col_idx] = pd.to_numeric(df.iloc[:, col_idx], errors='coerce').fillna(0)
 
             totals = calculate_totals(df)
             range_totals[sheet_name] = list(totals.values())
@@ -134,12 +143,12 @@ def process_file(input_file, output_file):
         # Summary sheet
         ranges = [">5L", "2L-5L", "50K-2L", "0-50K", "<0"]
         summary_columns = [
-            ["NVB Receivables"] * 3 + ["SMCS Receivables"] * 3 + ["Consolidated Receivables"] * 3,
+            ["SMCS Receivables"] * 3 + ["NVB Receivables"] * 3 + ["Consolidated Receivables"] * 3,
             ["Invoice Balance", "Available Credits", "Closing Balance"] * 3
         ]
 
         create_summary_sheet(range_totals, ranges, summary_columns, writer)
         summary_ws = writer.sheets['Summary']
-        apply_color_formatting(summary_ws, len(ranges), 11, workbook)
+        apply_color_formatting(summary_ws, len(ranges), 10, workbook)
 
     print(f"✅ Successfully processed and saved to {output_file}")

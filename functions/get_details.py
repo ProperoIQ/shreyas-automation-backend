@@ -26,7 +26,7 @@ def generate_access_token(client_id, client_secret, refresh_token):
 def save_excel_from_response(response, report_name, client_name):
     output_dir = "csvdata"
     os.makedirs(output_dir, exist_ok=True)
-    excel_filename = os.path.join(output_dir, f"input_{report_name}_details_{client_name}.xlsx")
+    excel_filename = os.path.join(output_dir, f"input_{report_name}_{client_name}.xlsx")
 
     try:
         with open(excel_filename, "wb") as f:
@@ -88,6 +88,15 @@ def fetch_report(report_name, url_template, client_data, date_filter):
     except requests.RequestException as e:
         logging.error(f"Error fetching {report_name}: {e}")
 
+# Function to get the appropriate URL based on client
+def get_customer_balance_url(client_name):
+    if client_name.lower() == "nvb":
+        # URL for NVB customer
+        return """https://www.zohoapis.com/books/v3/reports/customerbalancesummary?accept=xlsx&page=1&per_page=20000&sort_order=A&filter_by=TransactionDate.{value}&select_columns=%5B%7B%22field%22%3A%22customer_name%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22bcy_invoice_balance%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22bcy_available_credits%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22closing_balance%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22last_name%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22mobile_phone%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22email%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22custom_field_1941648000001342037%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22custom_field_1941648000003467027%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22custom_field_1941648000003146083%22%2C%22group%22%3A%22contact%22%7D%5D&is_for_date_range=false&usestate=true&group_by=%5B%7B%22field%22%3A%22none%22%2C%22group%22%3A%22report%22%7D%5D&sort_column=customer_name&can_ignore_zero_cb=false&response_option=1&x-zb-source=zbclient&formatneeded=true&paper_size=A4&orientation=portrait&font_family_for_body=opensans&margin_top=0.7&margin_bottom=0.7&margin_left=0.55&margin_right=0.2&table_size=classic&table_style=default&show_org_name=true&show_generated_date=false&show_generated_time=false&show_page_number=false&show_report_basis=true&show_generated_by=false&can_fit_to_page=true&watermark_opacity=50&show_org_logo_in_header=false&show_org_logo_as_watermark=false&watermark_position=center+center&watermark_zoom=50&file_name=Customer+Balance+Summary&organization_id={ORG_ID}&frameorigin=https%3A%2F%2Fbooks.zoho.com"""
+    else:
+        # URL for SMCS customer (existing URL)
+        return """https://www.zohoapis.com/books/v3/reports/customerbalancesummary?accept=xlsx&page=1&per_page=20000&sort_order=A&filter_by=TransactionDate.{value}&select_columns=%5B%7B%22field%22%3A%22customer_name%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22bcy_invoice_balance%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22bcy_available_credits%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22closing_balance%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22last_name%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22mobile_phone%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22email%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22custom_field_544542000001383001%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22custom_field_544542000011019221%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22custom_field_544542000010260003%22%2C%22group%22%3A%22contact%22%7D%5D&is_for_date_range=false&usestate=false&group_by=%5B%7B%22field%22%3A%22none%22%2C%22group%22%3A%22report%22%7D%5D&sort_column=customer_name&can_ignore_zero_cb=false&response_option=1&x-zb-source=zbclient&formatneeded=true&paper_size=A4&orientation=portrait&font_family_for_body=opensans&margin_top=0.7&margin_bottom=0.7&margin_left=0.55&margin_right=0.2&table_size=classic&show_generated_date=false&show_generated_time=false&show_page_number=false&show_report_basis=true&show_generated_by=false&can_fit_to_page=true&watermark_opacity=50&show_org_logo_in_header=false&show_org_logo_as_watermark=false&watermark_position=center+center&watermark_zoom=50&file_name=Customer+Balance+Summary&organization_id={ORG_ID}&frameorigin=https%3A%2F%2Fbooks.zoho.com"""
+
 # Function to fetch all reports for different clients
 def fetch_all_reports(date_filter):
     CREDENTIALS = [
@@ -107,21 +116,23 @@ def fetch_all_reports(date_filter):
         }
     ]
     
-    REPORTS = {
+    # Common reports configuration
+    COMMON_REPORTS = {
         "invoice_aging": {
             "url": "https://www.zohoapis.com/books/v3/reports/aragingdetails?accept=xlsx&organization_id={ORG_ID}&page=1&per_page=100000&sort_order=A&sort_column=date&interval_range=15&number_of_columns=4&interval_type=days&group_by=none&filter_by=InvoiceDueDate.{value}&entity_list=invoice&is_new_flow=true&response_option=1",
             "key": "invoiceaging"
-        },
-        "customer_balance_summary": {
-            "url": "https://www.zohoapis.com/books/v3/reports/customerbalancesummary?accept=xlsx&page=1&per_page=20000&sort_order=A&filter_by=TransactionDate.{value}&select_columns=%5B%7B%22field%22%3A%22customer_name%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22bcy_invoice_balance%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22bcy_available_credits%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22closing_balance%22%2C%22group%22%3A%22report%22%7D%2C%7B%22field%22%3A%22last_name%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22mobile_phone%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22email%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22custom_field_544542000001383001%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22custom_field_544542000011019221%22%2C%22group%22%3A%22contact%22%7D%2C%7B%22field%22%3A%22custom_field_544542000010260003%22%2C%22group%22%3A%22contact%22%7D%5D&is_for_date_range=false&usestate=false&group_by=%5B%7B%22field%22%3A%22none%22%2C%22group%22%3A%22report%22%7D%5D&sort_column=customer_name&can_ignore_zero_cb=false&response_option=1&x-zb-source=zbclient&formatneeded=true&paper_size=A4&orientation=portrait&font_family_for_body=opensans&margin_top=0.7&margin_bottom=0.7&margin_left=0.55&margin_right=0.2&table_size=classic&show_generated_date=false&show_generated_time=false&show_page_number=false&show_report_basis=true&show_generated_by=false&can_fit_to_page=true&watermark_opacity=50&show_org_logo_in_header=false&show_org_logo_as_watermark=false&watermark_position=center+center&watermark_zoom=50&file_name=Customer+Balance+Summary&organization_id={ORG_ID}&frameorigin=https%3A%2F%2Fbooks.zoho.com",
-            "key": "customerbalancesummary"
         }
     }
     
     for client_data in CREDENTIALS:
-        for report_name, report_data in REPORTS.items():
+        # Fetch common reports (invoice_aging) for all clients
+        for report_name, report_data in COMMON_REPORTS.items():
             fetch_report(report_name, report_data["url"], client_data, date_filter)
+        
+        # Fetch customer balance summary with client-specific URL
+        customer_balance_url = get_customer_balance_url(client_data["Client"])
+        fetch_report("customer_balance", customer_balance_url, client_data, date_filter)
 
 
 if __name__ == "__main__":
-    fetch_all_reports()
+    fetch_all_reports("")
