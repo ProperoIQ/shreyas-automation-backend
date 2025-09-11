@@ -100,9 +100,9 @@ def create_combined_excel(output_file: str, files_to_process: list):
                 except Exception as e:
                     print(f"[Combine Error] {file_path}: {e}")
 
+
 import openpyxl
 from openpyxl.utils import get_column_letter
-from openpyxl import Workbook
 
 def add_hyperlinks(file_path: str):
     wb = openpyxl.load_workbook(file_path)
@@ -188,75 +188,14 @@ def add_hyperlinks(file_path: str):
         wb.save(file_path)
         return
     
-    # Add Instructions sheet
     if 'Instructions' not in wb.sheetnames:
         inst_sheet = wb.create_sheet('Instructions')
         inst_sheet['A1'].value = "How to Use Hyperlinks"
         inst_sheet['A2'].value = (
-            "Click a hyperlink in the consolidated sheet to navigate to the aging sheet and automatically filter for the exact company name. "
+            "Click a hyperlink to navigate to the aging sheet with a pre-applied filter for the exact company name. "
             "Use Excel's filter dropdown to adjust or clear the filter manually if needed."
         )
     
-    # Prepare VBA code
-    vba_code = """
-Private Sub Workbook_SheetFollowHyperlink(ByVal Sh As Object, ByVal Target As Hyperlink)
-    Dim ws As Worksheet
-    Dim customerName As String
-    Dim targetSheet As String
-    Dim custCol As Long
-    
-    ' Get customer name from the cell with the hyperlink
-    customerName = Sh.Cells(Target.Parent.Row, {}).Value
-    
-    ' Determine target sheet from hyperlink address
-    targetSheet = Mid(Target.SubAddress, 2, InStr(Target.SubAddress, "!") - 2)
-    
-    ' Set worksheet
-    Set ws = ThisWorkbook.Sheets(targetSheet)
-    
-    ' Find customer_name column
-    custCol = 0
-    For i = 1 To ws.UsedRange.Columns.Count
-        If ws.Cells(1, i).Value = "customer_name" Then
-            custCol = i
-            Exit For
-        End If
-    Next i
-    
-    If custCol = 0 Then
-        MsgBox "customer_name column not found in " & targetSheet
-        Exit Sub
-    End If
-    
-    ' Clear existing filters
-    If ws.AutoFilterMode Then
-        ws.AutoFilterMode = False
-    End If
-    
-    ' Apply filter for customer_name
-    ws.Range("A1").AutoFilter Field:=custCol, Criteria1:=customerName
-    
-    ' Activate the target sheet
-    ws.Activate
-End Sub
-""".format(cust_name_col)
-
-    # Add VBA code to the workbook
-    try:
-        from win32com.client import Dispatch
-        xl = Dispatch('Excel.Application')
-        xl.Workbooks.Open(os.path.abspath(file_path))
-        xl.Application.Run("ThisWorkbook.VBAProject.VBComponents.Add", 1)  # Add Module
-        module = xl.Application.Run("ThisWorkbook.VBAProject.VBComponents", "Module1")
-        module.CodeModule.AddFromString(vba_code)
-        xl.ActiveWorkbook.Save()
-        xl.Quit()
-    except ImportError:
-        print("[VBA Error] pywin32 not installed. VBA code not added.")
-    except Exception as e:
-        print(f"[VBA Error] Failed to add VBA code: {str(e)}")
-    
-    # Add hyperlinks and comments
     for row in range(3, cons_sheet.max_row + 1):
         cust_name = cons_sheet.cell(row, cust_name_col).value
         if not cust_name:
@@ -274,6 +213,8 @@ End Sub
                 smcs_cell.hyperlink = f"#'{smcs_aging_name}'!A{first_row}"
                 smcs_cell.style = 'Hyperlink'
                 smcs_cell.comment = openpyxl.comments.Comment(f"Filter for: {cust_name}", 'Grok')
+                # Apply auto-filter for exact match
+                smcs_aging_sheet.auto_filter.add_filter_column(smcs_cust_col - 1, [cust_name])
         
         nvb_cell = cons_sheet.cell(row, nvb_inv_col)
         if isinstance(nvb_cell.value, (int, float)) and nvb_cell.value > 0:
@@ -287,9 +228,12 @@ End Sub
                 nvb_cell.hyperlink = f"#'{nvb_aging_name}'!A{first_row}"
                 nvb_cell.style = 'Hyperlink'
                 nvb_cell.comment = openpyxl.comments.Comment(f"Filter for: {cust_name}", 'Grok')
+                # Apply auto-filter for exact match
+                nvb_aging_sheet.auto_filter.add_filter_column(nvb_cust_col - 1, [cust_name])
     
     wb.save(file_path)
-    print("[Hyperlink] Hyperlinks, comments, and VBA macro added successfully")
+    print("[Hyperlink] Hyperlinks, auto-filters, and instructions added successfully")
+
 # Example usage
 # Example usage
 
@@ -322,7 +266,6 @@ async def process_and_download(
 ):
     try:
         
-        cleanup_folders()  # Clean up before starting
         # Step 1: Run processing pipeline
         fetch_all_reports(date_filter)
         process_multiple_files(
