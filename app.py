@@ -21,6 +21,7 @@ def process_files():
     process_multiple_files(file1, file2)
     progress_bar.progress(30)
     
+    
     status_text.text("Generating age summary...")
     input_files = {
         'SMCS': 'output/SMCS_Age_Range_Columns.xlsx',
