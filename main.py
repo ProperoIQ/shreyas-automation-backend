@@ -1,6 +1,7 @@
 import shutil
 import os
 import pandas as pd
+import requests
 from fastapi import FastAPI, Query, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +9,11 @@ import zipfile
 import openpyxl
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.hyperlink import Hyperlink
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
+from googleapiclient.errors import HttpError
 
 from functions.remove_decimals import remove_decimals_from_excel
 from functions.segregator import process_multiple_files
@@ -33,20 +39,117 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+
+def get_google_sheets_service():
+    """
+    Authenticate and return a Google Sheets API service client.
+    """
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    return build('sheets', 'v4', credentials=creds)
+
+def fetch_and_save_google_sheet_json(spreadsheet_id: str, range_name: str, api_key: str, output_path: str):
+    """
+    Fetch data from Google Sheet using the Sheets API and save it as a JSON file.
+    
+    Args:
+        spreadsheet_id (str): The ID of the Google Sheet.
+        range_name (str): The range to fetch (e.g., 'Sheet1!A1:D').
+        api_key (str): Google API key.
+        output_path (str): Path to save the JSON file.
+    
+    Returns:
+        dict: Status of the operation.
+    """
+    try:
+        url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range_name}?key={api_key}"
+        response = requests.get(url)
+        
+        if response.status_code == 200:
+            with open(output_path, "w") as f:
+                f.write(response.text)
+            print(f"[Google Sheet] JSON data saved to {output_path}")
+            return {"status": "success", "message": f"JSON saved to {output_path}"}
+        else:
+            error_message = f"Failed to fetch Google Sheet data: {response.status_code} - {response.text}"
+            print(f"[Google Sheet Error] {error_message}")
+            return {"status": "error", "message": error_message}
+    except Exception as e:
+        error_message = f"Error fetching Google Sheet data: {str(e)}"
+        print(f"[Google Sheet Error] {error_message}")
+        return {"status": "error", "message": error_message}
+
+def update_google_sheet_with_excel(spreadsheet_id: str, range_name: str, excel_path: str):
+    """
+    Update a Google Sheet with data from an Excel file.
+    
+    Args:
+        spreadsheet_id (str): The ID of the Google Sheet.
+        range_name (str): The range to update (e.g., 'Sheet1!A1').
+        excel_path (str): Path to the Excel file.
+    
+    Returns:
+        dict: Status of the operation.
+    """
+    try:
+        # Read the Excel file
+        excel_file = pd.ExcelFile(excel_path)
+        service = get_google_sheets_service()
+        
+        for sheet_name in excel_file.sheet_names:
+            df = pd.read_excel(excel_file, sheet_name=sheet_name)
+            # Convert DataFrame to list of lists for Google Sheets API
+            values = [df.columns.tolist()] + df.values.tolist()
+            
+            # Prepare the range for this sheet (create new sheet if needed)
+            sheet_range = f"{sheet_name}!{range_name}"
+            
+            # Check if sheet exists, create if not
+            sheets = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute().get('sheets', [])
+            sheet_exists = any(sheet['properties']['title'] == sheet_name for sheet in sheets)
+            if not sheet_exists:
+                service.spreadsheets().sheets().create(
+                    spreadsheetId=spreadsheet_id,
+                    body={'properties': {'title': sheet_name}}
+                ).execute()
+            
+            # Clear existing data in the range
+            service.spreadsheets().values().clear(
+                spreadsheetId=spreadsheet_id,
+                range=sheet_range
+            ).execute()
+            
+            # Update the sheet with new data
+            service.spreadsheets().values().update(
+                spreadsheetId=spreadsheet_id,
+                range=sheet_range,
+                valueInputOption="RAW",
+                body={"values": values}
+            ).execute()
+            print(f"[Google Sheet] Updated sheet {sheet_name} in Google Sheet")
+        
+        return {"status": "success", "message": "Google Sheet updated successfully"}
+    except Exception as e:
+        error_message = f"Error updating Google Sheet: {str(e)}"
+        print(f"[Google Sheet Error] {error_message}")
+        return {"status": "error", "message": error_message}
+
 def cleanup_folders(folders: list = ["csvdata", "output"], extra_files: list = ["output.zip"]):
     """
     Clean up specified folders by removing all files and subdirectories.
     Also removes specified extra files.
-    
-    Args:
-        folders (list): List of folder paths to clean up. Defaults to ["csvdata", "output"].
-        extra_files (list): List of specific files to delete. Defaults to ["output.zip"].
-    
-    Returns:
-        dict: Status of the cleanup operation.
     """
     try:
-        # Clean up folders
         for folder in folders:
             if os.path.exists(folder):
                 for item in os.listdir(folder):
@@ -63,7 +166,6 @@ def cleanup_folders(folders: list = ["csvdata", "output"], extra_files: list = [
             else:
                 print(f"[Cleanup] Folder does not exist: {folder}")
 
-        # Clean up extra files
         for file in extra_files:
             if os.path.exists(file):
                 try:
@@ -89,10 +191,8 @@ def create_combined_excel(output_file: str, files_to_process: list):
                     excel_file = pd.ExcelFile(file_path)
                     for sheet_name in excel_file.sheet_names:
                         df = excel_file.parse(sheet_name)
-                        # Build safe sheet name
                         base_name = os.path.splitext(os.path.basename(file_path))[0]
                         if len(excel_file.sheet_names) > 1:
-                            # For multi-sheet files, use shortened names if needed
                             safe_sheet_name = f"{base_name[:15]}_{sheet_name[:15]}"[:31]
                         else:
                             safe_sheet_name = base_name[:31]
@@ -100,14 +200,9 @@ def create_combined_excel(output_file: str, files_to_process: list):
                 except Exception as e:
                     print(f"[Combine Error] {file_path}: {e}")
 
-
-import openpyxl
-from openpyxl.utils import get_column_letter
-
 def add_hyperlinks(file_path: str):
     wb = openpyxl.load_workbook(file_path)
     
-    # Find the consolidated sheet
     cons_sheet = None
     for sheet_name in wb.sheetnames:
         if 'consolidated' in sheet_name.lower():
@@ -119,7 +214,6 @@ def add_hyperlinks(file_path: str):
         wb.save(file_path)
         return
     
-    # Assume aging sheet names
     smcs_aging_name = 'input_invoice_aging_smcs'
     nvb_aging_name = 'input_invoice_aging_nvb'
     
@@ -131,7 +225,6 @@ def add_hyperlinks(file_path: str):
     smcs_aging_sheet = wb[smcs_aging_name]
     nvb_aging_sheet = wb[nvb_aging_name]
     
-    # Sort aging sheets and add auto-filter
     def sort_aging_sheet(aging_sheet):
         cust_col = None
         for col in range(1, aging_sheet.max_column + 1):
@@ -206,14 +299,13 @@ def add_hyperlinks(file_path: str):
             first_row = None
             for r in range(2, smcs_aging_sheet.max_row + 1):
                 sheet_cust_name = smcs_aging_sheet.cell(r, smcs_cust_col).value
-                if sheet_cust_name == cust_name:  # Exact match
+                if sheet_cust_name == cust_name:
                     first_row = r
                     break
             if first_row:
                 smcs_cell.hyperlink = f"#'{smcs_aging_name}'!A{first_row}"
                 smcs_cell.style = 'Hyperlink'
                 smcs_cell.comment = openpyxl.comments.Comment(f"Filter for: {cust_name}", 'Grok')
-                # Apply auto-filter for exact match
                 smcs_aging_sheet.auto_filter.add_filter_column(smcs_cust_col - 1, [cust_name])
         
         nvb_cell = cons_sheet.cell(row, nvb_inv_col)
@@ -221,35 +313,26 @@ def add_hyperlinks(file_path: str):
             first_row = None
             for r in range(2, nvb_aging_sheet.max_row + 1):
                 sheet_cust_name = nvb_aging_sheet.cell(r, nvb_cust_col).value
-                if sheet_cust_name == cust_name:  # Exact match
+                if sheet_cust_name == cust_name:
                     first_row = r
                     break
             if first_row:
                 nvb_cell.hyperlink = f"#'{nvb_aging_name}'!A{first_row}"
                 nvb_cell.style = 'Hyperlink'
                 nvb_cell.comment = openpyxl.comments.Comment(f"Filter for: {cust_name}", 'Grok')
-                # Apply auto-filter for exact match
                 nvb_aging_sheet.auto_filter.add_filter_column(nvb_cust_col - 1, [cust_name])
     
     wb.save(file_path)
     print("[Hyperlink] Hyperlinks, auto-filters, and instructions added successfully")
 
-# Example usage
-# Example usage
-
 def create_zip_archive(files_to_zip: list, zip_path: str):
     """
     Create a zip archive containing the specified files.
-    
-    Args:
-        files_to_zip (list): List of file paths to include in the zip.
-        zip_path (str): Path where the zip file will be created.
     """
     try:
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for file_path in files_to_zip:
                 if os.path.exists(file_path):
-                    # Add file to zip with its basename to avoid including full path
                     zipf.write(file_path, os.path.basename(file_path))
                     print(f"[Zip] Added file to archive: {file_path}")
                 else:
@@ -265,8 +348,23 @@ async def process_and_download(
     date_filter: str = Query(..., description="Date filter for fetching reports")
 ):
     try:
+        # Step 0: Clean up previous files
+        cleanup_folders()
+
+        # Step 1: Fetch Google Sheet data and save as JSON
+        spreadsheet_id = "129lcQiNSXYmV5SXHG54fjwsMfUkDCYFY9lYEZlKKJwo"
+        range_name = "Sheet1!A1:D"
+        api_key = "AIzaSyCd9e48q7cXwFwR0NaKEh_wJrEMn5nVyhM"
+        json_output_path = "csvdata/google_sheet_data.json"
         
-        # Step 1: Run processing pipeline
+        os.makedirs("csvdata", exist_ok=True)
+        os.makedirs("output", exist_ok=True)
+        
+        result = fetch_and_save_google_sheet_json(spreadsheet_id, range_name, api_key, json_output_path)
+        if result["status"] == "error":
+            raise HTTPException(status_code=500, detail=result["message"])
+
+        # Step 2: Run processing pipeline
         fetch_all_reports(date_filter)
         process_multiple_files(
             'csvdata/input_invoice_aging_nvb.xlsx',
@@ -287,23 +385,20 @@ async def process_and_download(
         process_file('output/unified_file.xlsx', 'output/balances_summary.xlsx')
         combine_sheets('output/balances_summary.xlsx', 'output/Age_summary.xlsx', 'output/Final.xlsx')
        
-        # Step 2: Collect all files (inputs + outputs)
+        # Step 3: Collect all files (inputs + outputs)
         files_to_process = [
             'csvdata/input_invoice_aging_nvb.xlsx',
             'csvdata/input_invoice_aging_smcs.xlsx',
-             'output/balances_summary.xlsx',
+            'output/balances_summary.xlsx',
             'csvdata/input_customer_balance_nvb.xlsx',
             'csvdata/input_customer_balance_smcs.xlsx',
             'output/SMCS_Age_Range_Columns.xlsx',
             'output/NVB_Age_Range_Columns.xlsx',
             'output/Age_summary.xlsx',
             'output/unified_file.xlsx',
-           
-            'output/Final.xlsx'
+            'output/Final.xlsx',
+            json_output_path
         ]
-
-        # Step 3: Remove decimals from each file
-        # (Assuming this function processes in place or outputs to same path)
 
         # Step 4: Create a single combined Excel
         combined_file = "output/Combined_Report.xlsx"
@@ -312,13 +407,18 @@ async def process_and_download(
         # Step 5: Add hyperlinks to the consolidated sheet
         add_hyperlinks(combined_file)
         
-        files_to_process.append(combined_file)  # Add combined file to zip
+        # Step 6: Update Google Sheet with Combined_Report.xlsx
+        update_result = update_google_sheet_with_excel(spreadsheet_id, "A1", combined_file)
+        if update_result["status"] == "error":
+            raise HTTPException(status_code=500, detail=update_result["message"])
+        
+        files_to_process.append(combined_file)
 
-        # Step 6: Create zip archive
+        # Step 7: Create zip archive
         zip_path = "output.zip"
         create_zip_archive(files_to_process, zip_path)
 
-        # Step 7: Return the combined Excel file as response
+        # Step 8: Return the combined Excel file as response
         return FileResponse(
             combined_file,
             filename="Combined_Report.xlsx",
