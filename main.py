@@ -266,7 +266,12 @@ async def process_and_download(
 ):
     try:
         
+        
+        #step 0: Cleanup previous files
+        cleanup_folders()
+        
         # Step 1: Run processing pipeline
+        
         fetch_all_reports(date_filter)
         process_multiple_files(
             'csvdata/input_invoice_aging_nvb.xlsx',

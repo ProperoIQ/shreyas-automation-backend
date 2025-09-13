@@ -80,12 +80,53 @@ def apply_color_formatting(worksheet, num_rows, num_cols, workbook):
     worksheet.conditional_format(0, 0, num_rows + 2, num_cols - 1, {'type': 'no_blanks', 'format': border_format})
 
 def process_file(input_file, output_file):
+    # Read the Excel file
     consolidated_df = read_excel_file(input_file)
     if consolidated_df is None:
         return
 
+    # Ensure the correct header is used
     split_column_index = 9
-    derived_sheets = generate_sheets_by_balance(consolidated_df, split_column_index)
+    column_name = consolidated_df.columns[split_column_index]
+
+    # Convert the split column to numeric and drop NaN values
+    consolidated_df[column_name] = pd.to_numeric(consolidated_df[column_name], errors='coerce')
+    consolidated_df = consolidated_df.dropna(subset=[column_name])
+
+    # Sort consolidated descending by the split column
+    consolidated_df = consolidated_df.sort_values(by=column_name, ascending=False)
+
+    # Print the last data row (before adding total row)
+    if not consolidated_df.empty:
+        print("Last row of Consolidated sheet (before total row):\n", consolidated_df.iloc[-1].to_string())
+    else:
+        print("Consolidated DataFrame is empty.")
+
+    # Calculate totals for the consolidated sheet
+    totals = calculate_totals(consolidated_df)
+
+    # Create a total row with "Total" in customer_name and sums in numeric columns
+    total_row = pd.Series(index=consolidated_df.columns, dtype=object)
+    total_row['customer_name'] = 'Total'
+    total_row[consolidated_df.columns[1]] = totals['smcs_invoice_balance_sum']
+    total_row[consolidated_df.columns[2]] = totals['smcs_available_credits_sum']
+    total_row[consolidated_df.columns[3]] = totals['smcs_balance']
+    total_row[consolidated_df.columns[4]] = totals['nvb_invoice_balance_sum']
+    total_row[consolidated_df.columns[5]] = totals['nvb_available_credits_sum']
+    total_row[consolidated_df.columns[6]] = totals['nvb_balance']
+    total_row[consolidated_df.columns[7]] = totals['consolidated_invoice_balance_sum']
+    total_row[consolidated_df.columns[8]] = totals['consolidated_available_credits_sum']
+    total_row[consolidated_df.columns[9]] = totals['consolidated_cons_bal_os_sum']
+    # Fill non-numeric columns with NaN or empty strings
+    for col in consolidated_df.columns[10:]:
+        total_row[col] = ''
+
+    # Append total row to consolidated_df
+    total_row_df = pd.DataFrame([total_row], columns=consolidated_df.columns)
+    consolidated_df = pd.concat([consolidated_df, total_row_df], ignore_index=True)
+
+    # Generate derived sheets
+    derived_sheets = generate_sheets_by_balance(consolidated_df.iloc[:-1], split_column_index)  # Exclude total row for derived sheets
     range_totals = {}
 
     with pd.ExcelWriter(output_file, engine='xlsxwriter') as writer:
@@ -107,10 +148,7 @@ def process_file(input_file, output_file):
             "Last Name", "Email", "Mobile Phone", "Client Coordinator", "Leadership", "Is Customer part of the Group of Companies"
         ]
 
-        # Sort consolidated descending
-        consolidated_df = consolidated_df.sort_values(by=consolidated_df.columns[split_column_index], ascending=False)
-
-        # Write consolidated
+        # Write consolidated sheet (including total row)
         consolidated_df.to_excel(writer, sheet_name='Consolidated', index=False, header=False, startrow=2)
         worksheet = writer.sheets['Consolidated']
 
